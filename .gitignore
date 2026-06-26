@@ -1,0 +1,4 @@
+standup_data/
+epic_reports/
+.DS_Store
+*.code-workspace
