@@ -248,6 +248,26 @@
       filter: drop-shadow(0 0 8px rgba(185, 103, 255, 0.15));
     }
 
+    /* ── Velocity chart ───────────────────────────────────── */
+    .velocity-card {
+      background: var(--card); border-radius: var(--radius);
+      box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 20px 24px;
+      margin-bottom: 24px;
+      transition: all 0.3s ease;
+    }
+    body.dark-mode .velocity-card {
+      box-shadow: 0 4px 15px rgba(255, 0, 110, 0.1), 0 0 1px rgba(185, 103, 255, 0.2);
+    }
+    .velocity-card canvas { max-height: 280px; }
+    body.dark-mode .velocity-card canvas {
+      filter: drop-shadow(0 0 8px rgba(185, 103, 255, 0.15));
+    }
+    .velocity-notice {
+      font-size: 12px;
+      color: var(--orange);
+      margin-bottom: 12px;
+    }
+
     /* ── Tickets table ───────────────────────────────────── */
     .table-card {
       background: var(--card); border-radius: var(--radius);
@@ -490,6 +510,22 @@
     <canvas id="chart-type"></canvas>
   </div>
 
+  <!-- Velocity chart -->
+  <div class="velocity-card">
+    <div class="section-title">Sprint Velocity</div>
+    <div id="velocity-notice" class="velocity-notice" style="display:none">
+      ⚠️ Story points not yet available — showing tickets completed. Run the Backfill Points script to populate historical data.
+    </div>
+    <canvas id="chart-velocity"></canvas>
+  </div>
+
+  <!-- Sprint Assignment & Rollover chart -->
+  <div class="velocity-card">
+    <div class="section-title">Sprint Assignment &amp; Rollover</div>
+    <div id="rollover-notice" class="velocity-notice" style="display:none"></div>
+    <canvas id="chart-rollover"></canvas>
+  </div>
+
   <!-- Ticket table -->
   <div class="table-card">
     <div class="section-title">All Tickets</div>
@@ -545,6 +581,8 @@ function toggleDarkMode() {
     buildActivityChart(allDates);
     buildStatusChart(allTickets);
     buildTypeChart(allTickets);
+    buildVelocityChart(allDates);
+    buildRolloverChart(allDates);
   }
 }
 
@@ -619,9 +657,11 @@ let allDates    = [];   // sorted snapshots
 let sortCol     = 5;    // default sort = First Seen
 let sortAsc     = true;
 
-let activityChart = null;
-let statusChart   = null;
-let typeChart     = null;
+let activityChart      = null;
+let statusChart        = null;
+let typeChart          = null;
+let velocityChart  = null;
+let rolloverChart  = null;
 
 // ── Load data ───────────────────────────────────────────
 async function loadData() {
@@ -702,6 +742,8 @@ function buildReport(snapshots) {
   buildActivityChart(snapshots);
   buildStatusChart(allTickets);
   buildTypeChart(allTickets);
+  buildVelocityChart(snapshots);
+  buildRolloverChart(snapshots);
 
   // 4. Filters
   populateFilters(allTickets);
@@ -855,6 +897,252 @@ function buildTypeChart(tickets) {
         y: { 
           ticks: { font: { size: 12 }, color: labelColor },
           grid: { display: false }
+        },
+      },
+    },
+  });
+}
+
+// ── Velocity chart ──────────────────────────────────────
+function buildVelocityChart(snapshots) {
+  // Use the last snapshot we have per sprint
+  const sprintMap = new Map(); // sprintName -> latest snapshot
+  for (const snap of snapshots) {
+    const name = snap.sprint?.name;
+    if (!name) continue;
+    if (!sprintMap.has(name) || snap.date > sprintMap.get(name).date) {
+      sprintMap.set(name, snap);
+    }
+  }
+  if (sprintMap.size === 0) return;
+
+  // Sort sprints chronologically by their last snapshot date
+  const sprintEntries = [...sprintMap.entries()]
+    .sort((a, b) => a[1].date.localeCompare(b[1].date));
+
+  // Shorten label: "TLMD Q2 2026 | Sprint 12" → "Sprint 12"
+  const labels = sprintEntries.map(([name]) => name.replace(/^.*\|\s*/, ''));
+
+  const pointsPerSprint = sprintEntries.map(([, snap]) => {
+    const doneCol  = snap.columns.find(c => c.name === 'Done');
+    const tickets  = doneCol?.tickets || [];
+    const hasPoints = tickets.some(t => t.storyPoints != null);
+    if (!hasPoints) return null;
+    return tickets.reduce((sum, t) => sum + (t.storyPoints || 0), 0);
+  });
+
+  const ticketCountPerSprint = sprintEntries.map(([, snap]) => {
+    const doneCol = snap.columns.find(c => c.name === 'Done');
+    return doneCol?.tickets.length || 0;
+  });
+
+  const hasAnyPoints = pointsPerSprint.some(p => p !== null);
+  const primaryData  = hasAnyPoints ? pointsPerSprint.map(p => p ?? 0) : ticketCountPerSprint;
+  const yLabel       = hasAnyPoints ? 'Story Points' : 'Tickets Completed';
+
+  // 3-sprint rolling average (requires at least 3 sprints)
+  const avgData = primaryData.map((_, i) => {
+    if (i < 2) return null;
+    const slice = primaryData.slice(i - 2, i + 1).filter(v => v !== null);
+    return slice.length ? +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(1) : null;
+  });
+
+  // Show/hide the "no points" notice
+  const notice = document.getElementById('velocity-notice');
+  if (notice) notice.style.display = hasAnyPoints ? 'none' : 'block';
+
+  const isDark    = document.body.classList.contains('dark-mode');
+  const labelColor = isDark ? '#a0a0c0' : '#666';
+  const gridColor  = isDark ? 'rgba(160, 160, 192, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+  const barColor   = isDark ? '#b967ff' : '#0052CC';
+  const avgColor   = isDark ? '#72f1b8' : '#36B37E';
+
+  if (velocityChart) velocityChart.destroy();
+  velocityChart = new Chart(document.getElementById('chart-velocity'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          type:            'bar',
+          label:           yLabel,
+          data:            primaryData,
+          backgroundColor: barColor,
+          borderRadius:    4,
+          order:           2,
+        },
+        {
+          type:              'line',
+          label:             '3-Sprint Avg',
+          data:              avgData,
+          borderColor:       avgColor,
+          backgroundColor:   'transparent',
+          borderWidth:       2,
+          pointRadius:       4,
+          pointBackgroundColor: avgColor,
+          tension:           0.3,
+          order:             1,
+          spanGaps:          true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { boxWidth: 12, font: { size: 11 }, color: labelColor },
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const val = ctx.raw;
+              if (val === null || val === undefined) return null;
+              const unit = hasAnyPoints ? 'pt' : 'ticket';
+              return ` ${val} ${unit}${val !== 1 ? 's' : ''}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { font: { size: 11 }, color: labelColor },
+          grid:  { color: gridColor },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { stepSize: 1, font: { size: 11 }, color: labelColor },
+          grid:  { color: gridColor },
+          title: {
+            display: true,
+            text:    yLabel,
+            color:   labelColor,
+            font:    { size: 11 },
+          },
+        },
+      },
+    },
+  });
+}
+
+// ── Sprint Assignment & Rollover chart ──────────────────
+function buildRolloverChart(snapshots) {
+  const sprintMap = new Map();
+  for (const snap of snapshots) {
+    const name = snap.sprint?.name;
+    if (!name) continue;
+    if (!sprintMap.has(name) || snap.date > sprintMap.get(name).snap.date) {
+      // A sprint is still active if its endDate is in the future (or unknown)
+      const endDate = snap.sprint?.endDate ? new Date(snap.sprint.endDate) : null;
+      const isActive = endDate ? endDate > new Date() : (snap.sprint?.state === 'active');
+      sprintMap.set(name, { snap, isActive });
+    }
+  }
+  if (sprintMap.size === 0) return;
+
+  // Exclude sprints whose end date hasn't passed yet — data is incomplete mid-sprint
+  const activeSprints = [...sprintMap.entries()]
+    .filter(([, { isActive }]) => isActive)
+    .map(([name]) => name.replace(/^.*\|\s*/, ''));
+
+  const sprintEntries = [...sprintMap.entries()]
+    .filter(([, { isActive }]) => !isActive)
+    .sort((a, b) => a[1].snap.date.localeCompare(b[1].snap.date));
+
+  const notice = document.getElementById('rollover-notice');
+  if (activeSprints.length > 0) {
+    notice.style.display = 'block';
+    notice.textContent = `⏳ ${activeSprints.join(', ')} is still active — excluded until the sprint closes.`;
+  } else {
+    notice.style.display = 'none';
+  }
+
+  if (sprintEntries.length === 0) return;
+
+  const labels = sprintEntries.map(([name]) => name.replace(/^.*\|\s*/, ''));
+
+  const DONE_COLS = new Set(['Done', 'Ready for Deploy']);
+
+  const completedPerSprint = sprintEntries.map(([, { snap }]) => {
+    return snap.columns
+      .filter(c => DONE_COLS.has(c.name))
+      .reduce((sum, c) => sum + c.tickets.length, 0);
+  });
+
+  const rolledOverPerSprint = sprintEntries.map(([, { snap }]) => {
+    const total    = snap.columns.reduce((sum, col) => sum + col.tickets.length, 0);
+    const complete = snap.columns
+      .filter(c => DONE_COLS.has(c.name))
+      .reduce((sum, c) => sum + c.tickets.length, 0);
+    return total - complete;
+  });
+
+  const isDark     = document.body.classList.contains('dark-mode');
+  const labelColor = isDark ? '#a0a0c0' : '#666';
+  const gridColor  = isDark ? 'rgba(160, 160, 192, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+  const doneColor  = isDark ? '#72f1b8' : '#36B37E';
+  const rollColor  = isDark ? '#ff3864' : '#FF5630';
+
+  if (rolloverChart) rolloverChart.destroy();
+  rolloverChart = new Chart(document.getElementById('chart-rollover'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label:           'Completed',
+          data:            completedPerSprint,
+          backgroundColor: doneColor,
+          borderRadius:    0,
+          stack:           'sprint',
+        },
+        {
+          label:           'Rolled Over',
+          data:            rolledOverPerSprint,
+          backgroundColor: rollColor,
+          borderRadius:    4,
+          stack:           'sprint',
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { boxWidth: 12, font: { size: 11 }, color: labelColor },
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const val = ctx.raw;
+              if (val === null || val === undefined) return null;
+              return ` ${val} ticket${val !== 1 ? 's' : ''}`;
+            },
+            footer: items => {
+              const total = items.reduce((sum, i) => sum + (i.raw || 0), 0);
+              return `Total assigned: ${total}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          stacked: true,
+          ticks: { font: { size: 11 }, color: labelColor },
+          grid:  { color: gridColor },
+        },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          ticks: { stepSize: 1, font: { size: 11 }, color: labelColor },
+          grid:  { color: gridColor },
+          title: {
+            display: true,
+            text:    'Tickets',
+            color:   labelColor,
+            font:    { size: 11 },
+          },
         },
       },
     },
