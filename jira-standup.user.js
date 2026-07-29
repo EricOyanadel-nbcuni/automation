@@ -18,9 +18,28 @@
   const STORE_NAME = 'handles';
   const HANDLE_KEY = 'standupDir';
 
+  let cachedDirHandle;
+  const dirHandleReady = warmDirHandleCache();
+
+  function isIndexedDbBlocked(err) {
+    const msg = String(err?.message || err || '').toLowerCase();
+    return (
+      err?.name === 'SecurityError' ||
+      msg.includes('blocked by consent preferences') ||
+      msg.includes('access to the database') ||
+      msg.includes('indexeddb')
+    );
+  }
+
   function openDb() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1);
+      let req;
+      try {
+        req = indexedDB.open(DB_NAME, 1);
+      } catch (err) {
+        reject(err);
+        return;
+      }
       req.onupgradeneeded = e => e.target.result.createObjectStore(STORE_NAME);
       req.onsuccess  = e => resolve(e.target.result);
       req.onerror    = e => reject(e.target.error);
@@ -28,23 +47,62 @@
   }
 
   async function loadDirHandle() {
-    const db = await openDb();
-    return new Promise((resolve, reject) => {
-      const tx  = db.transaction(STORE_NAME, 'readonly');
-      const req = tx.objectStore(STORE_NAME).get(HANDLE_KEY);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror   = e => reject(e.target.error);
-    });
+    try {
+      const db = await openDb();
+      return await new Promise((resolve, reject) => {
+        const tx  = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get(HANDLE_KEY);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror   = e => reject(e.target.error);
+      });
+    } catch (err) {
+      if (isIndexedDbBlocked(err)) {
+        console.warn('[Jira Standup] IndexedDB is blocked by site/browser consent settings. Folder selection will not persist.');
+        return null;
+      }
+      throw err;
+    }
   }
 
   async function saveDirHandle(handle) {
-    const db = await openDb();
-    return new Promise((resolve, reject) => {
-      const tx  = db.transaction(STORE_NAME, 'readwrite');
-      const req = tx.objectStore(STORE_NAME).put(handle, HANDLE_KEY);
-      req.onsuccess = () => resolve();
-      req.onerror   = e => reject(e.target.error);
-    });
+    try {
+      const db = await openDb();
+      return await new Promise((resolve, reject) => {
+        const tx  = db.transaction(STORE_NAME, 'readwrite');
+        const req = tx.objectStore(STORE_NAME).put(handle, HANDLE_KEY);
+        req.onsuccess = () => resolve();
+        req.onerror   = e => reject(e.target.error);
+      });
+    } catch (err) {
+      if (isIndexedDbBlocked(err)) {
+        // Non-fatal: standup can proceed without persisted folder handle.
+        return;
+      }
+      throw err;
+    }
+  }
+
+  async function warmDirHandleCache() {
+    try {
+      cachedDirHandle = await loadDirHandle();
+      return cachedDirHandle;
+    } catch (err) {
+      if (isIndexedDbBlocked(err)) {
+        cachedDirHandle = null;
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  async function resetStoredDirHandle() {
+    try {
+      await indexedDB.deleteDatabase(DB_NAME);
+      cachedDirHandle = null;
+    } catch (err) {
+      if (isIndexedDbBlocked(err)) return;
+      throw err;
+    }
   }
 
   // Verify or request write permission for a stored handle
@@ -56,7 +114,11 @@
 
   // Get a valid directory handle — use stored one or prompt user to pick
   async function getOutputDir() {
-    let handle = await loadDirHandle();
+    if (cachedDirHandle === undefined) {
+      await dirHandleReady;
+    }
+
+    let handle = cachedDirHandle;
     if (handle) {
       try {
         // Verify both permission and that directory still exists
@@ -73,15 +135,13 @@
         console.warn('[Jira Standup] Stored directory handle is invalid:', err.message);
       }
     }
-    // First time (or permission revoked) — ask user to pick ~/NBC/automation/standup_data
-    alert(
-      'One-time setup:\n\n' +
-      'In the folder picker that opens, navigate to:\n' +
-      '  ~/NBC/automation/standup_data\n\n' +
-      'Select that folder. You will not be asked again.'
-    );
     handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-    await saveDirHandle(handle);
+    cachedDirHandle = handle;
+    try {
+      await saveDirHandle(handle);
+    } catch (err) {
+      console.warn('[Jira Standup] Could not persist selected folder handle:', err.message || err);
+    }
     return handle;
   }
 
@@ -344,8 +404,12 @@
     btn.addEventListener('contextmenu', async (e) => {
       e.preventDefault();
       if (confirm('Reset stored directory?\n\nThis will let you select a new folder location.')) {
-        await indexedDB.deleteDatabase(DB_NAME);
-        alert('Directory reset! Click the Standup button to select a new folder.');
+        try {
+          await resetStoredDirHandle();
+          alert('Directory reset! Click the Standup button to select a new folder.');
+        } catch (err) {
+          alert('Could not reset stored directory:\n' + (err.message || err));
+        }
       }
     });
 
@@ -388,6 +452,9 @@
 
     try {
       const baseUrl = 'https://nbcnewsdigital.atlassian.net';
+
+      // Open the folder picker now, while the click gesture is still active.
+      const outputDir = await getOutputDir();
 
       // 1. Extract board ID from current URL
       const boardMatch = window.location.href.match(/\/boards\/(\d+)/);
@@ -503,9 +570,6 @@
         })),
       };
 
-      // 9. Write JSON snapshot to ~/NBC/automation/standup_data/
-      const outputDir = await getOutputDir();
-
       // Read yesterday's file (actual yesterday, not just most recent)
       const previousSnapshot = await getYesterdaySnapshot(outputDir, now);
 
@@ -534,11 +598,17 @@
     }
   }
 
-  // ─── Wait for DOM before injecting button ─────────────────────────────────
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', injectButton);
-  } else {
-    injectButton();
-  }
+  // ─── Wait for folder-handle warmup before injecting button ───────────────
+  const injectWhenReady = () => {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', injectButton, { once: true });
+    } else {
+      injectButton();
+    }
+  };
+
+  dirHandleReady
+    .catch(() => null)
+    .finally(injectWhenReady);
 
 })();
