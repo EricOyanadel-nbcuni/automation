@@ -2,6 +2,7 @@
 // @name         Jira Copilot Button
 // @namespace    http://tampermonkey.net/
 // @version      1.0
+// @lastModified 2026-08-14
 // @description  Adds a Copilot button to Jira ticket pages that copies the description and acceptance criteria to clipboard
 // @author       You
 // @match        https://nbcnewsdigital.atlassian.net/*

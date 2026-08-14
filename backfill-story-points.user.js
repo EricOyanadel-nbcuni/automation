@@ -2,6 +2,7 @@
 // @name         Jira Story Points Backfill
 // @namespace    http://tampermonkey.net/
 // @version      1.0
+// @lastModified 2026-08-14
 // @description  Backfills story points into existing standup_data JSON snapshots using customfield_10004
 // @author       Eric Oyanadel
 // @match        https://nbcnewsdigital.atlassian.net/*

@@ -2,6 +2,7 @@
 // @name         Jira Epic Report Generator
 // @namespace    http://tampermonkey.net/
 // @version      1.0
+// @lastModified 2026-08-14
 // @description  Generates a confidence-scored roadmap report from the Jira Epic Report page and saves it as Markdown
 // @author       Eric Oyanadel
 // @match        https://nbcnewsdigital.atlassian.net/*

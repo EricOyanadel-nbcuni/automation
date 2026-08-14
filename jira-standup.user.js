@@ -2,6 +2,7 @@
 // @name         Jira Standup Generator
 // @namespace    http://tampermonkey.net/
 // @version      1.4
+// @lastModified 2026-08-14
 // @description  Generates a standup message from your active sprint tickets, copies to clipboard, and saves JSON for Copilot
 // @author       Eric Oyanadel
 // @match        https://nbcnewsdigital.atlassian.net/*
@@ -200,7 +201,7 @@
         // hiding Done from the modal edit 4/28/26
         if (col.name === 'Done') continue;
         for (const ticket of col.tickets) {
-          text += `• ${ticket.key} - ${ticket.summary} : ${col.name}\n`;
+          text += `• ${ticket.key} - ${ticket.summary}\n`;
         }
       }
     } else {
@@ -212,7 +213,7 @@
       // hiding Done from the modal edit 4/28/26
       if (status === 'Done') continue;
       for (const ticket of todayGroups[status]) {
-        text += `• ${ticket.key} - ${ticket.summary} : ${status}\n`;
+        text += `• ${ticket.key} - ${ticket.summary}\n`;
       }
     }
 
