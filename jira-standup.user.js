@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira Standup Generator
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @lastModified 2026-08-14
 // @description  Generates a standup message from your active sprint tickets, copies to clipboard, and saves JSON for Copilot
 // @author       Eric Oyanadel
@@ -219,6 +219,11 @@
 
     text += `\nBlockers: None\nAfter Talk: None`;
     return text;
+  }
+
+  // Safety net: remove any trailing " : <status>" from bullet ticket lines.
+  function stripStatusSuffixFromBulletLines(text) {
+    return text.replace(/^(•\s+[A-Z]+-\d+\s+-\s+.*)\s+:\s+[^:]+$/gm, '$1');
   }
 
   // Convert ticket keys (e.g. TAP-1172) to clickable Jira links in HTML
@@ -581,7 +586,9 @@
       await writeJsonFile(outputDir, timestampedFilename, snapshot);
 
       // 10. Build standup text and show modal
-      const modalText = buildStandupText(now, previousSnapshot, grouped, sortedStatuses);
+      const modalText = stripStatusSuffixFromBulletLines(
+        buildStandupText(now, previousSnapshot, grouped, sortedStatuses)
+      );
       showStandupModal(modalText);
 
       GM_notification({
