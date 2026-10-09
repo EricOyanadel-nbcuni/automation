@@ -198,8 +198,7 @@
     text += `Yesterday\n`;
     if (yesterdaySnapshot && yesterdaySnapshot.columns && yesterdaySnapshot.columns.length) {
       for (const col of yesterdaySnapshot.columns) {
-        // hiding Done from the modal edit 4/28/26
-        if (col.name === 'Done') continue;
+        if (['done', 'ready for deploy', 'ready to deploy', 'qa'].includes(col.name.trim().toLowerCase())) continue;
         for (const ticket of col.tickets) {
           text += `• ${ticket.key} - ${ticket.summary}\n`;
         }
@@ -210,8 +209,7 @@
 
     text += `Today\n`;
     for (const status of todayOrder) {
-      // hiding Done from the modal edit 4/28/26
-      if (status === 'Done') continue;
+      if (['done', 'ready for deploy', 'ready to deploy', 'qa'].includes(status.trim().toLowerCase())) continue;
       for (const ticket of todayGroups[status]) {
         text += `• ${ticket.key} - ${ticket.summary}\n`;
       }
